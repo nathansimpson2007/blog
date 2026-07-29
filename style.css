@@ -32,3 +32,9 @@ li {
 nav {
   margin-bottom: 2em;
 }
+
+img {
+  max-width: 100%;
+  display: block;
+  margin-bottom: 1.5em;
+}
