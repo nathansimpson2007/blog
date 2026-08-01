@@ -38,3 +38,8 @@ img {
   display: block;
   margin-bottom: 1.5em;
 }
+footer {
+  margin-top: 3em;
+  color: #666;
+  font-size: 0.9em;
+}
