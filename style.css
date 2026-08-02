@@ -43,3 +43,32 @@ footer {
   color: #666;
   font-size: 0.9em;
 }
+
+textarea {
+  width: 100%;
+  min-height: 8em;
+  padding: 0.5em;
+  font-family: inherit;
+  font-size: 1em;
+  border: 1px solid #ccc;
+  box-sizing: border-box;
+}
+
+button {
+  margin-top: 0.5em;
+  padding: 0.4em 1.2em;
+  font-family: inherit;
+  font-size: 1em;
+}
+
+/* Honeypot field: off-screen rather than display:none, which some bots skip. */
+.hp {
+  position: absolute;
+  left: -9999px;
+}
+
+hr {
+  border: none;
+  border-top: 1px solid #ddd;
+  margin: 1.5em 0;
+}

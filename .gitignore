@@ -1,0 +1,3 @@
+# Local Wrangler state — not part of the site
+worker/.wrangler/
+node_modules/

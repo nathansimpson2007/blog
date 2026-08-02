@@ -1,0 +1,12 @@
+name = "messages"
+main = "index.js"
+compatibility_date = "2026-08-01"
+
+routes = [
+  { pattern = "messages.nathansimpson.org", custom_domain = true }
+]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "messages"
+database_id = "5220ad22-d702-4c3a-85b7-931940e0c233"

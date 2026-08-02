@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>leave a message — nathan simpson</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<nav><a href="index.html">&larr; back to index</a></nav>
+
+<h1>leave a message</h1>
+
+<p>
+Say whatever you want. I won't know who sent it — no name, no email, nothing
+is recorded except what you type below.
+</p>
+
+<form method="POST" action="https://messages.nathansimpson.org/submit">
+  <textarea name="message" required maxlength="5000"></textarea>
+
+  <!-- Honeypot: hidden from people, catches bots that fill in every field. -->
+  <input type="text" name="website" class="hp" tabindex="-1" autocomplete="off">
+
+  <button type="submit">send</button>
+</form>
+
+</body>
+</html>
