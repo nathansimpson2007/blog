@@ -171,11 +171,29 @@ async function handleAdmin(request, env, url) {
       ? `<p class="problem">${escapeHtml(problem)}</p>`
       : "";
 
+  // One probe drives both the status line and the now-page prefill, so a dead
+  // token is obvious immediately rather than after typing out a whole post.
+  const github = await probeGitHub(env);
+
+  const status = github.ok
+    ? `<p class="date">github: connected${
+        github.expires ? ` · token expires ${escapeHtml(github.expires)}` : ""
+      }</p>`
+    : "";
+
+  const publishing = github.ok
+    ? [renderWriteForm(), renderNowForm(github.nowContent), renderPictureForm()].join("\n\n")
+    : `<h2>publishing</h2>
+
+<p class="problem">unavailable — ${escapeHtml(github.error)}</p>
+
+<p>the post, now-page and picture forms are hidden until that is fixed, so
+nothing gets typed out and lost. everything below still works.</p>`;
+
   const sections = [
     banner,
-    await renderWriteForm(env),
-    await renderNowForm(env),
-    renderPictureForm(),
+    status,
+    publishing,
     "<h2>guestbook — waiting for approval</h2>",
     renderQueue(pending.results, true),
     "<h2>guestbook — published</h2>",
@@ -187,7 +205,42 @@ async function handleAdmin(request, env, url) {
   return page("admin", sections.join("\n"));
 }
 
-async function renderWriteForm(env) {
+// Reads now.html and confirms the token still works. Returns the page's current
+// content on success so the editor is never prefilled with an empty box.
+async function probeGitHub(env) {
+  try {
+    const response = await fetch(
+      `https://api.github.com/repos/${env.GITHUB_REPO}/contents/now.html`,
+      { headers: ghHeaders(env) }
+    );
+
+    if (response.status === 401 || response.status === 403) {
+      return { ok: false, error: `GitHub rejected the token (${response.status}) — it has probably expired.` };
+    }
+
+    if (!response.ok) {
+      return { ok: false, error: `GitHub returned ${response.status} for now.html.` };
+    }
+
+    const file = await response.json();
+    const html = fromBase64(file.content);
+    const match = html.match(/<!-- now:start -->\n?([\s\S]*?)\n?<!-- now:end -->/);
+
+    if (!match) {
+      return { ok: false, error: "now.html no longer has its content markers." };
+    }
+
+    return {
+      ok: true,
+      nowContent: match[1],
+      expires: response.headers.get("github-authentication-token-expiration"),
+    };
+  } catch (error) {
+    return { ok: false, error: error.message };
+  }
+}
+
+function renderWriteForm() {
   return `<h2>write a post</h2>
 
 <form method="POST" action="/admin">
@@ -199,18 +252,7 @@ async function renderWriteForm(env) {
 </form>`;
 }
 
-async function renderNowForm(env) {
-  let current = "";
-
-  try {
-    const file = await ghGetFile(env, "now.html");
-    const html = fromBase64(file.content);
-    const match = html.match(/<!-- now:start -->\n?([\s\S]*?)\n?<!-- now:end -->/);
-    current = match ? match[1] : "";
-  } catch {
-    current = "";
-  }
-
+function renderNowForm(current) {
   return `<h2>edit the now page</h2>
 
 <form method="POST" action="/admin">
