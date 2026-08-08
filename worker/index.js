@@ -81,16 +81,16 @@ function formatDate(iso) {
 
   if (isNaN(date)) return iso;
 
-  const formatted = date.toLocaleString("en-US", {
+  // timeZoneName gives CST or CDT depending on the date.
+  return date.toLocaleString("en-US", {
     timeZone: "America/Chicago",
     month: "short",
     day: "numeric",
     year: "numeric",
     hour: "numeric",
     minute: "2-digit",
+    timeZoneName: "short",
   });
-
-  return `${formatted} CST`;
 }
 
 function authorized(request, password) {
