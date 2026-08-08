@@ -307,7 +307,9 @@ function renderPictureForm() {
 
 <form method="POST" action="/admin" enctype="multipart/form-data">
   <input type="hidden" name="action" value="picture">
-  <p><input type="file" name="image" accept="image/*" required></p>
+  <p><input type="file" name="image" accept="image/jpeg,image/png,image/gif,image/webp" required></p>
+  <p><input type="text" name="date" value="${escapeHtml(today())}" required></p>
+  <p><input type="text" name="caption" placeholder="caption (optional)" maxlength="200"></p>
   <button type="submit">upload</button>
 </form>`;
 }
@@ -439,8 +441,14 @@ async function handleAdminAction(request, env) {
         );
       }
 
-      const name = await uploadPicture(env, image);
-      return backToAdmin(request, `uploaded ${name}.`);
+      const name = await uploadPicture(
+        env,
+        image,
+        (form.get("date") || "").trim(),
+        (form.get("caption") || "").trim()
+      );
+
+      return backToAdmin(request, `uploaded ${name}. the page rebuilds in a moment.`);
     }
   } catch (error) {
     return backToAdmin(request, null, error.message);
@@ -544,7 +552,7 @@ async function updateNowPage(env, content) {
   await ghPutFile(env, "now.html", toBase64(updated), "Update the now page", file.sha);
 }
 
-async function uploadPicture(env, image) {
+async function uploadPicture(env, image, date, caption) {
   const name = safeFilename(image.name);
 
   if (!name) throw new Error("that filename can't be used.");
@@ -562,15 +570,27 @@ async function uploadPicture(env, image) {
   const bytes = await image.arrayBuffer();
   await ghPutFile(env, `images/${name}`, bufferToBase64(bytes), `Add ${name}`);
 
-  const pictures = await ghGetFile(env, "pictures.html");
-  const html = fromBase64(pictures.content);
+  // pictures.json is the source of truth; a workflow renders the page from it.
+  const manifestFile = await ghGetFile(env, "pictures.json");
+
+  if (!manifestFile) throw new Error("pictures.json is missing from the repo.");
+
+  let manifest;
+
+  try {
+    manifest = JSON.parse(fromBase64(manifestFile.content));
+  } catch {
+    throw new Error("pictures.json isn't valid JSON — fix it before uploading.");
+  }
+
+  manifest.unshift({ file: name, date: date || today(), caption: caption || "" });
 
   await ghPutFile(
     env,
-    "pictures.html",
-    toBase64(html.replace("</body>", `<img src="images/${name}" alt="">\n\n</body>`)),
-    `Show ${name} on the pictures page`,
-    pictures.sha
+    "pictures.json",
+    toBase64(`${JSON.stringify(manifest, null, 2)}\n`),
+    `List ${name} in the pictures manifest`,
+    manifestFile.sha
   );
 
   return name;

@@ -1,0 +1,36 @@
+name: rebuild pictures page
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "pictures.json"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  pictures:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Rebuild pictures.html
+        run: node scripts/build-pictures.js
+
+      - name: Commit if anything changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if [ -n "$(git status --porcelain pictures.html)" ]; then
+            git add pictures.html
+            git commit -m "Rebuild pictures page"
+            git push
+          else
+            echo "No change."
+          fi
