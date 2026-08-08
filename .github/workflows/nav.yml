@@ -1,0 +1,37 @@
+name: rebuild post navigation
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "posts/**"
+      - "index.html"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  nav:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Rebuild previous/next links
+        run: node scripts/build-nav.js
+
+      - name: Commit if anything changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if [ -n "$(git status --porcelain posts/)" ]; then
+            git add posts/
+            git commit -m "Rebuild post navigation"
+            git push
+          else
+            echo "No change."
+          fi

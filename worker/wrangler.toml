@@ -7,6 +7,9 @@ routes = [
   { pattern = "guestbook.nathansimpson.org", custom_domain = true }
 ]
 
+[vars]
+GITHUB_REPO = "nathansimpson2007/blog"
+
 [[d1_databases]]
 binding = "DB"
 database_name = "messages"

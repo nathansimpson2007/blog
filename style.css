@@ -74,6 +74,16 @@ button {
   font-size: 1em;
 }
 
+.notice,
+.problem {
+  padding: 0.5em 0.8em;
+  border-left: 3px solid #666;
+}
+
+.problem {
+  border-left-color: #b00;
+}
+
 /* Approve/delete buttons sit side by side on the admin page. */
 .actions form {
   display: inline;
