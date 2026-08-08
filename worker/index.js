@@ -17,6 +17,10 @@ const GUESTBOOK_MAX_LENGTH = 1000;
 const GUESTBOOK_MAX_NAME = 50;
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 
+// Anything served out of images/ is a real page on the blog's own domain, so
+// only formats browsers render as images are allowed in.
+const IMAGE_EXTENSIONS = ["jpg", "jpeg", "png", "gif", "webp"];
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -131,6 +135,12 @@ async function handleSubmit(request, env) {
 /* -------------------------------------------------------------- admin panel */
 
 async function handleAdmin(request, env, url) {
+  // Basic auth credentials ride along on cross-site form posts, so anything
+  // that changes state has to prove it came from this site.
+  if (request.method === "POST" && !sameOrigin(request)) {
+    return new Response("Forbidden", { status: 403 });
+  }
+
   if (!authorized(request, env.ADMIN_PASSWORD)) {
     return new Response("Unauthorized", {
       status: 401,
@@ -426,6 +436,12 @@ async function uploadPicture(env, image) {
 
   if (!name) throw new Error("that filename can't be used.");
 
+  const extension = name.includes(".") ? name.split(".").pop().toLowerCase() : "";
+
+  if (!IMAGE_EXTENSIONS.includes(extension)) {
+    throw new Error(`only ${IMAGE_EXTENSIONS.join(", ")} files can be uploaded.`);
+  }
+
   if (await ghGetFile(env, `images/${name}`)) {
     throw new Error(`images/${name} already exists — rename the file first.`);
   }
@@ -493,6 +509,22 @@ async function ghPutFile(env, path, base64, message, sha) {
 }
 
 /* ------------------------------------------------------------------- helpers */
+
+// Browsers send Origin on every POST. Sec-Fetch-Site is the fallback for the
+// rare client that omits it; with neither header present the request is refused.
+function sameOrigin(request) {
+  const origin = request.headers.get("Origin");
+
+  if (origin) {
+    try {
+      return new URL(origin).host === new URL(request.url).host;
+    } catch {
+      return false;
+    }
+  }
+
+  return request.headers.get("Sec-Fetch-Site") === "same-origin";
+}
 
 function authorized(request, password) {
   const header = request.headers.get("Authorization") || "";
