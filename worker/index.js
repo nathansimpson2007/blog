@@ -68,11 +68,29 @@ async function handleAdmin(request, env) {
   const list = results
     .map(
       (m) =>
-        `<p class="date">${escapeHtml(m.created_at)}</p><p>${escapeHtml(m.body)}</p><hr>`
+        `<p class="date">${escapeHtml(formatDate(m.created_at))}</p><p>${escapeHtml(m.body)}</p><hr>`
     )
     .join("\n");
 
   return page("messages", list);
+}
+
+// Timestamps are stored as UTC; central time is only for display.
+function formatDate(iso) {
+  const date = new Date(iso);
+
+  if (isNaN(date)) return iso;
+
+  const formatted = date.toLocaleString("en-US", {
+    timeZone: "America/Chicago",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+
+  return `${formatted} CST`;
 }
 
 function authorized(request, password) {
