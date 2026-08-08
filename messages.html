@@ -16,14 +16,22 @@ Say whatever you want. I won't know who sent it — no name, no email, nothing
 is recorded except what you type below.
 </p>
 
-<form method="POST" action="https://messages.nathansimpson.org/submit">
-  <textarea name="message" required maxlength="5000"></textarea>
+<form method="POST" action="https://messages.nathansimpson.org/submit" enctype="multipart/form-data">
+  <textarea name="message" maxlength="5000"></textarea>
+
+  <p><input type="file" name="image" accept="image/jpeg,image/png,image/gif,image/webp"></p>
 
   <!-- Honeypot: hidden from people, catches bots that fill in every field. -->
   <input type="text" name="website" class="hp" tabindex="-1" autocomplete="off">
 
   <button type="submit">send</button>
 </form>
+
+<p class="date">
+Pictures are optional, 5MB max. Bear in mind that photos often carry hidden
+data such as the location and time they were taken — if you want to stay
+anonymous, send a screenshot rather than the original file.
+</p>
 
 </body>
 </html>

@@ -38,7 +38,7 @@ export default {
       return handleSubmit(request, env);
     }
 
-    if (url.pathname === "/admin") {
+    if (url.pathname.startsWith("/admin")) {
       return handleAdmin(request, env, url);
     }
 
@@ -116,8 +116,10 @@ async function handleSubmit(request, env) {
   }
 
   const body = (form.get("message") || "").trim();
+  const image = form.get("image");
+  const hasImage = image && typeof image !== "string" && image.size > 0;
 
-  if (!body) {
+  if (!body && !hasImage) {
     return page("empty", "<p>the message was empty. nothing was sent.</p>");
   }
 
@@ -125,8 +127,36 @@ async function handleSubmit(request, env) {
     return page("too long", `<p>messages are capped at ${MAX_LENGTH} characters.</p>`);
   }
 
-  await env.DB.prepare("INSERT INTO messages (body, created_at) VALUES (?, ?)")
-    .bind(body, new Date().toISOString())
+  let imageKey = null;
+
+  if (hasImage) {
+    if (image.size > MAX_IMAGE_BYTES) {
+      return page(
+        "too big",
+        `<p>that image is ${(image.size / 1024 / 1024).toFixed(1)}MB — the limit is 5MB.</p>`
+      );
+    }
+
+    const extension = extensionOf(image.name);
+
+    if (!IMAGE_EXTENSIONS.includes(extension)) {
+      return page(
+        "wrong type",
+        `<p>only ${IMAGE_EXTENSIONS.join(", ")} images can be attached.</p>`
+      );
+    }
+
+    imageKey = crypto.randomUUID();
+
+    await env.MESSAGE_IMAGES.put(imageKey, await image.arrayBuffer(), {
+      metadata: { contentType: contentTypeFor(extension) },
+    });
+  }
+
+  await env.DB.prepare(
+    "INSERT INTO messages (body, created_at, image_key) VALUES (?, ?, ?)"
+  )
+    .bind(body, new Date().toISOString(), imageKey)
     .run();
 
   return page("thanks", "<p>message sent. thank you.</p>");
@@ -152,8 +182,16 @@ async function handleAdmin(request, env, url) {
     return handleAdminAction(request, env);
   }
 
+  // Attachments are private, so they are served from behind this same password
+  // rather than from any public URL.
+  if (url.pathname.startsWith("/admin/image/")) {
+    return serveImage(env, url.pathname.slice("/admin/image/".length));
+  }
+
   const [messages, pending, approved] = await Promise.all([
-    env.DB.prepare("SELECT id, body, created_at FROM messages ORDER BY id DESC").all(),
+    env.DB.prepare(
+      "SELECT id, body, created_at, image_key FROM messages ORDER BY id DESC"
+    ).all(),
     env.DB.prepare(
       "SELECT id, name, body, created_at FROM guestbook WHERE approved = 0 ORDER BY id DESC"
     ).all(),
@@ -278,13 +316,37 @@ function renderMessages(messages) {
   if (!messages.length) return "<p>no messages yet.</p>";
 
   return messages
-    .map(
-      (m) =>
-        `<p class="date">${escapeHtml(formatDate(m.created_at))}</p><p>${escapeHtml(
-          m.body
-        )}</p><p class="actions">${actionButton(m.id, "delete-message", "delete")}</p><hr>`
-    )
+    .map((m) => {
+      const text = m.body ? `<p>${escapeHtml(m.body)}</p>` : "";
+      const picture = m.image_key
+        ? `<p><img src="/admin/image/${encodeURIComponent(m.image_key)}" alt=""></p>`
+        : "";
+
+      return `<p class="date">${escapeHtml(
+        formatDate(m.created_at)
+      )}</p>${text}${picture}<p class="actions">${actionButton(
+        m.id,
+        "delete-message",
+        "delete"
+      )}</p><hr>`;
+    })
     .join("\n");
+}
+
+async function serveImage(env, key) {
+  const stored = await env.MESSAGE_IMAGES.getWithMetadata(key, { type: "arrayBuffer" });
+
+  if (!stored || !stored.value) {
+    return new Response("Not found", { status: 404 });
+  }
+
+  return new Response(stored.value, {
+    headers: {
+      "Content-Type": (stored.metadata && stored.metadata.contentType) || "image/jpeg",
+      // Private content: never let a shared cache hold on to it.
+      "Cache-Control": "private, no-store",
+    },
+  });
 }
 
 function renderQueue(entries, showApprove) {
@@ -325,6 +387,15 @@ async function handleAdminAction(request, env) {
     }
 
     if (action === "delete-message" && validId(id)) {
+      // Drop the attachment too, so deleting a message really removes it.
+      const row = await env.DB.prepare("SELECT image_key FROM messages WHERE id = ?")
+        .bind(id)
+        .first();
+
+      if (row && row.image_key) {
+        await env.MESSAGE_IMAGES.delete(row.image_key);
+      }
+
       await env.DB.prepare("DELETE FROM messages WHERE id = ?").bind(id).run();
       return backToAdmin(request, "message deleted.");
     }
@@ -598,6 +669,21 @@ function slugify(title) {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 60);
+}
+
+function extensionOf(name) {
+  const clean = String(name || "").toLowerCase();
+  return clean.includes(".") ? clean.split(".").pop() : "";
+}
+
+function contentTypeFor(extension) {
+  return extension === "png"
+    ? "image/png"
+    : extension === "gif"
+      ? "image/gif"
+      : extension === "webp"
+        ? "image/webp"
+        : "image/jpeg";
 }
 
 function safeFilename(name) {

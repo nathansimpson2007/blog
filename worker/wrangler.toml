@@ -10,6 +10,10 @@ routes = [
 [vars]
 GITHUB_REPO = "nathansimpson2007/blog"
 
+[[kv_namespaces]]
+binding = "MESSAGE_IMAGES"
+id = "b65057af9cf34f978d2fa4b90f1991d4"
+
 [[d1_databases]]
 binding = "DB"
 database_name = "messages"
