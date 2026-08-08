@@ -1,15 +1,28 @@
-// Receives anonymous messages from the blog and stores them in D1.
-// Only /admin can read them back, behind a password.
+// Two separate things live here:
+//   - private messages, written at /submit and readable only at /admin
+//   - a public guestbook, on guestbook.nathansimpson.org
+// They use different tables so private messages can never surface publicly.
 //
 // Bindings this Worker needs:
-//   DB              -> D1 database (the one holding the messages table)
+//   DB              -> D1 database (holds the messages and guestbook tables)
 //   ADMIN_PASSWORD  -> secret, the password for /admin
 
 const MAX_LENGTH = 5000;
+const GUESTBOOK_MAX_LENGTH = 1000;
+const GUESTBOOK_MAX_NAME = 50;
 
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+
+    const isGuestbook =
+      url.hostname.startsWith("guestbook.") || url.pathname.startsWith("/guestbook");
+
+    if (isGuestbook) {
+      return request.method === "POST"
+        ? handleGuestbookSign(request, env)
+        : handleGuestbookPage(env);
+    }
 
     if (request.method === "POST" && url.pathname === "/submit") {
       return handleSubmit(request, env);
@@ -22,6 +35,57 @@ export default {
     return new Response("Not found", { status: 404 });
   },
 };
+
+async function handleGuestbookPage(env) {
+  const { results } = await env.DB.prepare(
+    "SELECT name, body, created_at FROM guestbook ORDER BY id DESC"
+  ).all();
+
+  const entries = results.length
+    ? results
+        .map(
+          (entry) =>
+            `<p class="date">${escapeHtml(entry.name || "anonymous")} · ${escapeHtml(
+              formatDate(entry.created_at)
+            )}</p><p>${escapeHtml(entry.body)}</p><hr>`
+        )
+        .join("\n")
+    : "<p>nobody has signed it yet. be the first.</p>";
+
+  const form = `<form method="POST" action="/">
+  <p><input type="text" name="name" placeholder="name (optional)" maxlength="${GUESTBOOK_MAX_NAME}"></p>
+  <textarea name="message" required maxlength="${GUESTBOOK_MAX_LENGTH}"></textarea>
+  <input type="text" name="website" class="hp" tabindex="-1" autocomplete="off">
+  <button type="submit">sign</button>
+</form>
+
+<hr>`;
+
+  return page("guestbook", `${form}\n${entries}`);
+}
+
+async function handleGuestbookSign(request, env) {
+  const form = await request.formData();
+
+  if (form.get("website")) {
+    return page("guestbook", "<p>signed. thank you.</p>");
+  }
+
+  const body = (form.get("message") || "").trim();
+  const name = (form.get("name") || "").trim().slice(0, GUESTBOOK_MAX_NAME);
+
+  if (!body || body.length > GUESTBOOK_MAX_LENGTH) {
+    return page("guestbook", "<p>that didn't go through. try again.</p>");
+  }
+
+  await env.DB.prepare(
+    "INSERT INTO guestbook (name, body, created_at) VALUES (?, ?, ?)"
+  )
+    .bind(name || null, body, new Date().toISOString())
+    .run();
+
+  return handleGuestbookPage(env);
+}
 
 async function handleSubmit(request, env) {
   const form = await request.formData();

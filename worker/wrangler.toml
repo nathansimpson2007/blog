@@ -3,7 +3,8 @@ main = "index.js"
 compatibility_date = "2026-08-01"
 
 routes = [
-  { pattern = "messages.nathansimpson.org", custom_domain = true }
+  { pattern = "messages.nathansimpson.org", custom_domain = true },
+  { pattern = "guestbook.nathansimpson.org", custom_domain = true }
 ]
 
 [[d1_databases]]
