@@ -1,0 +1,38 @@
+name: update music page
+
+on:
+  schedule:
+    # Hourly. Scheduled runs are best-effort and can lag by a few minutes.
+    - cron: "0 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Build music.html
+        run: node scripts/build-music.js
+        env:
+          LASTFM_USER: ${{ vars.LASTFM_USER }}
+          LASTFM_API_KEY: ${{ secrets.LASTFM_API_KEY }}
+
+      - name: Commit if anything changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if [ -n "$(git status --porcelain music.html)" ]; then
+            git add music.html
+            git commit -m "Update music page"
+            git push
+          else
+            echo "No change."
+          fi
