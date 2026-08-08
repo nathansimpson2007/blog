@@ -74,6 +74,15 @@ button {
   font-size: 1em;
 }
 
+/* Approve/delete buttons sit side by side on the admin page. */
+.actions form {
+  display: inline;
+}
+
+.actions button {
+  margin-right: 0.5em;
+}
+
 /* Honeypot field: off-screen rather than display:none, which some bots skip. */
 .hp {
   position: absolute;

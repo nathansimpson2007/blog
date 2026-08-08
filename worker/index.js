@@ -38,7 +38,7 @@ export default {
 
 async function handleGuestbookPage(env) {
   const { results } = await env.DB.prepare(
-    "SELECT name, body, created_at FROM guestbook ORDER BY id DESC"
+    "SELECT name, body, created_at FROM guestbook WHERE approved = 1 ORDER BY id DESC"
   ).all();
 
   const entries = results.length
@@ -68,7 +68,7 @@ async function handleGuestbookSign(request, env) {
   const form = await request.formData();
 
   if (form.get("website")) {
-    return page("guestbook", "<p>signed. thank you.</p>");
+    return page("guestbook", pendingNotice());
   }
 
   const body = (form.get("message") || "").trim();
@@ -84,7 +84,12 @@ async function handleGuestbookSign(request, env) {
     .bind(name || null, body, new Date().toISOString())
     .run();
 
-  return handleGuestbookPage(env);
+  return page("guestbook", pendingNotice());
+}
+
+function pendingNotice() {
+  return `<p>signed. it will show up once it has been approved.</p>
+<p><a href="/">back to the guestbook</a></p>`;
 }
 
 async function handleSubmit(request, env) {
@@ -121,22 +126,74 @@ async function handleAdmin(request, env) {
     });
   }
 
-  const { results } = await env.DB.prepare(
-    "SELECT body, created_at FROM messages ORDER BY id DESC"
-  ).all();
-
-  if (!results.length) {
-    return page("messages", "<p>no messages yet.</p>");
+  if (request.method === "POST") {
+    return handleAdminAction(request, env);
   }
 
-  const list = results
-    .map(
-      (m) =>
-        `<p class="date">${escapeHtml(formatDate(m.created_at))}</p><p>${escapeHtml(m.body)}</p><hr>`
-    )
-    .join("\n");
+  const [messages, pending, approved] = await Promise.all([
+    env.DB.prepare("SELECT body, created_at FROM messages ORDER BY id DESC").all(),
+    env.DB.prepare(
+      "SELECT id, name, body, created_at FROM guestbook WHERE approved = 0 ORDER BY id DESC"
+    ).all(),
+    env.DB.prepare(
+      "SELECT id, name, body, created_at FROM guestbook WHERE approved = 1 ORDER BY id DESC"
+    ).all(),
+  ]);
 
-  return page("messages", list);
+  const sections = [
+    "<h2>guestbook — waiting for approval</h2>",
+    renderQueue(pending.results, true),
+    "<h2>guestbook — published</h2>",
+    renderQueue(approved.results, false),
+    "<h2>private messages</h2>",
+    messages.results.length
+      ? messages.results
+          .map(
+            (m) =>
+              `<p class="date">${escapeHtml(formatDate(m.created_at))}</p><p>${escapeHtml(m.body)}</p><hr>`
+          )
+          .join("\n")
+      : "<p>no messages yet.</p>",
+  ];
+
+  return page("admin", sections.join("\n"));
+}
+
+function renderQueue(entries, showApprove) {
+  if (!entries.length) {
+    return showApprove ? "<p>nothing waiting.</p>" : "<p>nothing published yet.</p>";
+  }
+
+  return entries
+    .map((entry) => {
+      const approve = showApprove
+        ? `<form method="POST" action="/admin"><input type="hidden" name="id" value="${entry.id}"><input type="hidden" name="action" value="approve"><button type="submit">approve</button></form>`
+        : "";
+
+      const remove = `<form method="POST" action="/admin"><input type="hidden" name="id" value="${entry.id}"><input type="hidden" name="action" value="delete"><button type="submit">delete</button></form>`;
+
+      return `<p class="date">${escapeHtml(entry.name || "anonymous")} · ${escapeHtml(
+        formatDate(entry.created_at)
+      )}</p><p>${escapeHtml(entry.body)}</p><p class="actions">${approve}${remove}</p><hr>`;
+    })
+    .join("\n");
+}
+
+async function handleAdminAction(request, env) {
+  const form = await request.formData();
+  const id = Number(form.get("id"));
+  const action = form.get("action");
+
+  if (Number.isInteger(id) && id > 0) {
+    if (action === "approve") {
+      await env.DB.prepare("UPDATE guestbook SET approved = 1 WHERE id = ?").bind(id).run();
+    } else if (action === "delete") {
+      await env.DB.prepare("DELETE FROM guestbook WHERE id = ?").bind(id).run();
+    }
+  }
+
+  // Redirect so a refresh doesn't repeat the action.
+  return Response.redirect(new URL("/admin", request.url).toString(), 303);
 }
 
 // Timestamps are stored as UTC; central time is only for display.
