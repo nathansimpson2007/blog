@@ -1,13 +1,62 @@
 [
-  { "file": "Screenshot-2026-08-08-152159.png", "date": "2026-08-08", "caption": "" },
-  { "file": "image.jpg", "date": "2026-08-08", "caption": "" },
-  { "file": "IMG_0240.png", "date": "2026-07-31", "caption": "" },
-  { "file": "IMG_0239.png", "date": "2026-07-31", "caption": "" },
-  { "file": "IMG_0238.png", "date": "2026-07-31", "caption": "" },
-  { "file": "IMG_0237.png", "date": "2026-07-31", "caption": "" },
-  { "file": "IMG_0236.png", "date": "2026-07-31", "caption": "" },
-  { "file": "IMG_0235.png", "date": "2026-07-31", "caption": "" },
-  { "file": "IMG_0234.png", "date": "2026-07-31", "caption": "" },
-  { "file": "IMG_0220.jpeg", "date": "2026-07-31", "caption": "" },
-  { "file": "image0.jpg", "date": "2026-07-29", "caption": "" }
+  {
+    "file": "IMG_0374.jpeg",
+    "date": "2026-08-09",
+    "caption": "Lunch with friends"
+  },
+  {
+    "file": "Screenshot-2026-08-08-152159.png",
+    "date": "2026-08-08",
+    "caption": ""
+  },
+  {
+    "file": "image.jpg",
+    "date": "2026-08-08",
+    "caption": ""
+  },
+  {
+    "file": "IMG_0240.png",
+    "date": "2026-07-31",
+    "caption": ""
+  },
+  {
+    "file": "IMG_0239.png",
+    "date": "2026-07-31",
+    "caption": ""
+  },
+  {
+    "file": "IMG_0238.png",
+    "date": "2026-07-31",
+    "caption": ""
+  },
+  {
+    "file": "IMG_0237.png",
+    "date": "2026-07-31",
+    "caption": ""
+  },
+  {
+    "file": "IMG_0236.png",
+    "date": "2026-07-31",
+    "caption": ""
+  },
+  {
+    "file": "IMG_0235.png",
+    "date": "2026-07-31",
+    "caption": ""
+  },
+  {
+    "file": "IMG_0234.png",
+    "date": "2026-07-31",
+    "caption": ""
+  },
+  {
+    "file": "IMG_0220.jpeg",
+    "date": "2026-07-31",
+    "caption": ""
+  },
+  {
+    "file": "image0.jpg",
+    "date": "2026-07-29",
+    "caption": ""
+  }
 ]
