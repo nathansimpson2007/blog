@@ -66,13 +66,36 @@ th {
   white-space: nowrap;
 }
 
+/* The poker page needs more room than a post does. */
+body.wide {
+  max-width: 64em;
+}
+
+/* Keep each session on one line; the wrapper scrolls on narrow screens. */
+.sessions th,
+.sessions td {
+  white-space: nowrap;
+}
+
+.sessions tr.has-note td {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.sessions tr.note td {
+  white-space: normal;
+  color: #666;
+  padding-bottom: 0.6em;
+}
+
 @media (prefers-color-scheme: dark) {
   th,
   td {
     border-bottom-color: #333;
   }
 
-  th {
+  th,
+  .sessions tr.note td {
     color: #888;
   }
 }
