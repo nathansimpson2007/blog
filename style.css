@@ -30,6 +30,12 @@ li {
   margin-bottom: 0.5em;
 }
 
+/* Bulleted lists inside posts. The index list stays unmarked. */
+ul.bullets {
+  list-style: disc;
+  padding-left: 1.5em;
+}
+
 .date {
   color: #666;
   font-size: 0.9em;
