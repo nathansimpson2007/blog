@@ -21,6 +21,9 @@ const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 // only formats browsers render as images are allowed in.
 const IMAGE_EXTENSIONS = ["jpg", "jpeg", "png", "gif", "webp"];
 
+// How much notice to give before the GitHub token stops working.
+const EXPIRY_WARNING_DAYS = 14;
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -213,11 +216,7 @@ async function handleAdmin(request, env, url) {
   // token is obvious immediately rather than after typing out a whole post.
   const github = await probeGitHub(env);
 
-  const status = github.ok
-    ? `<p class="date">github: connected${
-        github.expires ? ` · token expires ${escapeHtml(github.expires)}` : ""
-      }</p>`
-    : "";
+  const status = github.ok ? renderTokenStatus(github.expires) : "";
 
   const publishing = github.ok
     ? [renderWriteForm(), renderNowForm(github.nowContent), renderPictureForm()].join("\n\n")
@@ -241,6 +240,37 @@ nothing gets typed out and lost. everything below still works.</p>`;
   ];
 
   return page("admin", sections.join("\n"));
+}
+
+// Publishing dies silently on the day the token expires, so warn while there is
+// still time to replace it.
+function renderTokenStatus(expires) {
+  if (!expires) return `<p class="date">github: connected</p>`;
+
+  // GitHub sends "2027-09-11 15:30:00 UTC", which isn't ISO 8601.
+  const parsed = new Date(String(expires).trim().replace(" UTC", "Z").replace(" ", "T"));
+  const daysLeft = Math.floor((parsed - Date.now()) / 86400000);
+
+  if (isNaN(daysLeft)) {
+    return `<p class="date">github: connected · token expires ${escapeHtml(expires)}</p>`;
+  }
+
+  if (daysLeft <= EXPIRY_WARNING_DAYS) {
+    const when =
+      daysLeft <= 0
+        ? "today"
+        : daysLeft === 1
+          ? "tomorrow"
+          : `in ${daysLeft} days`;
+
+    return `<p class="problem">the github token expires ${when} (${escapeHtml(
+      expires.slice(0, 10)
+    )}). replace it with: wrangler secret put GITHUB_TOKEN</p>`;
+  }
+
+  return `<p class="date">github: connected · token expires ${escapeHtml(
+    expires.slice(0, 10)
+  )} (${daysLeft} days)</p>`;
 }
 
 // Reads now.html and confirms the token still works. Returns the page's current
