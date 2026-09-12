@@ -36,6 +36,47 @@ ul.bullets {
   padding-left: 1.5em;
 }
 
+/* Wide tables scroll sideways on small screens instead of stretching the page. */
+.table-wrap {
+  overflow-x: auto;
+  margin-bottom: 1.5em;
+}
+
+table {
+  border-collapse: collapse;
+  font-size: 0.9em;
+  margin-bottom: 1.5em;
+}
+
+th,
+td {
+  padding: 0.3em 0.8em 0.3em 0;
+  border-bottom: 1px solid #ddd;
+  text-align: left;
+  vertical-align: top;
+}
+
+th {
+  font-weight: normal;
+  color: #666;
+}
+
+.num {
+  text-align: right;
+  white-space: nowrap;
+}
+
+@media (prefers-color-scheme: dark) {
+  th,
+  td {
+    border-bottom-color: #333;
+  }
+
+  th {
+    color: #888;
+  }
+}
+
 .date {
   color: #666;
   font-size: 0.9em;

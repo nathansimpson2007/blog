@@ -4,7 +4,8 @@ compatibility_date = "2026-08-01"
 
 routes = [
   { pattern = "messages.nathansimpson.org", custom_domain = true },
-  { pattern = "guestbook.nathansimpson.org", custom_domain = true }
+  { pattern = "guestbook.nathansimpson.org", custom_domain = true },
+  { pattern = "poker.nathansimpson.org", custom_domain = true }
 ]
 
 [vars]

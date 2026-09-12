@@ -1,13 +1,14 @@
-// Three things live here:
+// Four things live here:
 //   - private messages, written at /submit and readable only at /admin
 //   - a public guestbook, on guestbook.nathansimpson.org, held for approval
+//   - a public poker bankroll tracker, on poker.nathansimpson.org
 //   - the admin panel at /admin, which also publishes to the blog repo
 //
 // Private messages and guestbook entries use different tables so a private
 // message can never surface publicly.
 //
 // Bindings this Worker needs:
-//   DB              -> D1 database (holds the messages and guestbook tables)
+//   DB              -> D1 database (messages, guestbook, poker_sessions, settings)
 //   ADMIN_PASSWORD  -> secret, the password for /admin
 //   GITHUB_TOKEN    -> secret, a token with contents:write on the blog repo
 //   GITHUB_REPO     -> plain var, e.g. "nathansimpson2007/blog"
@@ -27,6 +28,15 @@ const EXPIRY_WARNING_DAYS = 14;
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+
+    const isPoker = url.hostname.startsWith("poker.") || url.pathname === "/poker";
+
+    // The public tracker is read-only; sessions are only ever changed from /admin.
+    if (isPoker) {
+      return request.method === "GET" || request.method === "HEAD"
+        ? handlePokerPage(env)
+        : new Response("Method not allowed", { status: 405 });
+    }
 
     const isGuestbook =
       url.hostname.startsWith("guestbook.") || url.pathname.startsWith("/guestbook");
@@ -191,7 +201,8 @@ async function handleAdmin(request, env, url) {
     return serveImage(env, url.pathname.slice("/admin/image/".length));
   }
 
-  const [messages, pending, approved] = await Promise.all([
+  const [poker, messages, pending, approved] = await Promise.all([
+    loadPoker(env),
     env.DB.prepare(
       "SELECT id, body, created_at, image_key FROM messages ORDER BY id DESC"
     ).all(),
@@ -206,11 +217,16 @@ async function handleAdmin(request, env, url) {
   const notice = url.searchParams.get("ok");
   const problem = url.searchParams.get("err");
 
-  const banner = notice
+  const bannerHtml = notice
     ? `<p class="notice">${escapeHtml(notice)}</p>`
     : problem
       ? `<p class="problem">${escapeHtml(problem)}</p>`
       : "";
+
+  // Poker actions land back on their own section, so show the result there
+  // rather than at the top of a long page.
+  const pokerFocused = url.searchParams.get("at") === "poker";
+  const banner = pokerFocused ? "" : bannerHtml;
 
   // One probe drives both the status line and the now-page prefill, so a dead
   // token is obvious immediately rather than after typing out a whole post.
@@ -231,6 +247,7 @@ nothing gets typed out and lost. everything below still works.</p>`;
     banner,
     status,
     publishing,
+    renderPokerAdmin(poker, url.searchParams.get("edit-poker"), pokerFocused ? bannerHtml : ""),
     "<h2>guestbook — waiting for approval</h2>",
     renderQueue(pending.results, true),
     "<h2>guestbook — published</h2>",
@@ -480,6 +497,78 @@ async function handleAdminAction(request, env) {
 
       return backToAdmin(request, `uploaded ${name}. the page rebuilds in a moment.`);
     }
+    if (action === "add-poker" || action === "update-poker") {
+      const session = parsePokerForm(form);
+
+      if (session.error) {
+        return backToAdmin(request, null, session.error, "poker");
+      }
+
+      const values = [
+        session.playedOn,
+        session.game,
+        session.stakes,
+        session.location,
+        session.hours,
+        session.buyIn,
+        session.cashOut,
+        session.notes,
+      ];
+
+      if (action === "update-poker") {
+        if (!validId(id)) {
+          return backToAdmin(request, null, "that session wasn't found.", "poker");
+        }
+
+        await env.DB.prepare(
+          `UPDATE poker_sessions
+           SET played_on = ?, game = ?, stakes = ?, location = ?, hours = ?,
+               buy_in_cents = ?, cash_out_cents = ?, notes = ?
+           WHERE id = ?`
+        )
+          .bind(...values, id)
+          .run();
+
+        return backToAdmin(request, "session updated.", null, "poker");
+      }
+
+      await env.DB.prepare(
+        `INSERT INTO poker_sessions
+         (played_on, game, stakes, location, hours, buy_in_cents, cash_out_cents, notes, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+        .bind(...values, new Date().toISOString())
+        .run();
+
+      return backToAdmin(request, "session added.", null, "poker");
+    }
+
+    if (action === "delete-poker" && validId(id)) {
+      await env.DB.prepare("DELETE FROM poker_sessions WHERE id = ?").bind(id).run();
+      return backToAdmin(request, "session deleted.", null, "poker");
+    }
+
+    if (action === "poker-start") {
+      const cents = parseCents(form.get("amount"));
+
+      if (cents === null) {
+        return backToAdmin(
+          request,
+          null,
+          "the starting bankroll needs to be a dollar amount, like 500 or 500.00.",
+          "poker"
+        );
+      }
+
+      await env.DB.prepare(
+        `INSERT INTO settings (key, value) VALUES ('poker_starting_bankroll_cents', ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+      )
+        .bind(String(cents))
+        .run();
+
+      return backToAdmin(request, "starting bankroll saved.", null, "poker");
+    }
   } catch (error) {
     return backToAdmin(request, null, error.message);
   }
@@ -491,14 +580,238 @@ function validId(id) {
   return Number.isInteger(id) && id > 0;
 }
 
-// Redirect after acting so a refresh doesn't repeat it.
-function backToAdmin(request, notice, problem) {
+// Redirect after acting so a refresh doesn't repeat it. A section name jumps the
+// page back to that section and shows the result there.
+function backToAdmin(request, notice, problem, section) {
   const target = new URL("/admin", request.url);
 
   if (notice) target.searchParams.set("ok", notice);
   if (problem) target.searchParams.set("err", problem);
 
+  if (section) {
+    target.searchParams.set("at", section);
+    target.hash = section;
+  }
+
   return Response.redirect(target.toString(), 303);
+}
+
+/* -------------------------------------------------------------------- poker */
+
+const usd = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
+
+function money(cents) {
+  return usd.format(cents / 100);
+}
+
+function signedMoney(cents) {
+  return cents > 0 ? `+${money(cents)}` : money(cents);
+}
+
+function formatHours(hours) {
+  return String(Math.round(hours * 100) / 100);
+}
+
+// Accepts "200", "200.50", "$1,200". Returns whole cents, or null if unusable.
+function parseCents(value) {
+  const clean = String(value || "").trim().replace(/[$,\s]/g, "");
+
+  if (!/^\d+(\.\d{1,2})?$/.test(clean)) return null;
+
+  return Math.round(Number(clean) * 100);
+}
+
+// Loads every session oldest first and walks forward through them, so each row
+// knows the bankroll it left behind.
+async function loadPoker(env) {
+  const [sessions, start] = await Promise.all([
+    env.DB.prepare("SELECT * FROM poker_sessions ORDER BY played_on ASC, id ASC").all(),
+    env.DB.prepare(
+      "SELECT value FROM settings WHERE key = 'poker_starting_bankroll_cents'"
+    ).first(),
+  ]);
+
+  const startingCents = start ? Number(start.value) || 0 : 0;
+
+  let running = startingCents;
+
+  const rows = sessions.results.map((session) => {
+    const profit = session.cash_out_cents - session.buy_in_cents;
+    running += profit;
+    return { ...session, profit, bankrollAfter: running };
+  });
+
+  // The hourly rate only counts sessions that recorded hours, so a session
+  // logged without them doesn't inflate it.
+  const timed = rows.filter((row) => row.hours > 0);
+  const hours = timed.reduce((sum, row) => sum + row.hours, 0);
+  const timedProfit = timed.reduce((sum, row) => sum + row.profit, 0);
+
+  return {
+    startingCents,
+    bankroll: running,
+    totalProfit: running - startingCents,
+    count: rows.length,
+    hours,
+    hourly: hours > 0 ? timedProfit / hours : null,
+    rows,
+  };
+}
+
+function parsePokerForm(form) {
+  const text = (name, max) => (form.get(name) || "").trim().slice(0, max);
+
+  const playedOn = text("date", 10);
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(playedOn) || isNaN(new Date(playedOn))) {
+    return { error: "the date needs to look like 2026-09-12." };
+  }
+
+  const buyIn = parseCents(form.get("buy_in"));
+  const cashOut = parseCents(form.get("cash_out"));
+
+  if (buyIn === null) {
+    return { error: "the buy-in needs to be a dollar amount, like 200 or 200.50." };
+  }
+
+  if (cashOut === null) {
+    return { error: "the cash-out needs to be a dollar amount, like 0 or 350." };
+  }
+
+  const hoursText = text("hours", 10);
+  let hours = null;
+
+  if (hoursText) {
+    hours = Number(hoursText);
+
+    if (!Number.isFinite(hours) || hours <= 0 || hours > 72) {
+      return { error: "hours needs to be a number above 0 and no more than 72." };
+    }
+  }
+
+  return {
+    playedOn,
+    game: text("game", 60) || null,
+    stakes: text("stakes", 60) || null,
+    location: text("location", 100) || null,
+    hours,
+    buyIn,
+    cashOut,
+    notes: text("notes", 1000) || null,
+  };
+}
+
+async function handlePokerPage(env) {
+  const poker = await loadPoker(env);
+
+  const summaryRows = [
+    ["bankroll", money(poker.bankroll)],
+    ["profit", signedMoney(poker.totalProfit)],
+    ["sessions", String(poker.count)],
+    ["hours", formatHours(poker.hours)],
+  ];
+
+  if (poker.hourly !== null) {
+    summaryRows.push(["per hour", signedMoney(Math.round(poker.hourly))]);
+  }
+
+  const summary = `<table>
+${summaryRows.map(([label, value]) => `<tr><th>${label}</th><td class="num">${value}</td></tr>`).join("\n")}
+</table>`;
+
+  const columns = [
+    ["date", false],
+    ["game", false],
+    ["stakes", false],
+    ["location", false],
+    ["hours", true],
+    ["buy-in", true],
+    ["cash-out", true],
+    ["profit", true],
+    ["bankroll", true],
+    ["notes", false],
+  ];
+
+  const header = columns
+    .map(([label, numeric]) => `<th${numeric ? ' class="num"' : ""}>${label}</th>`)
+    .join("");
+
+  const body = [...poker.rows]
+    .reverse()
+    .map(
+      (row) => `<tr>
+<td class="num">${escapeHtml(row.played_on)}</td>
+<td>${escapeHtml(row.game || "")}</td>
+<td>${escapeHtml(row.stakes || "")}</td>
+<td>${escapeHtml(row.location || "")}</td>
+<td class="num">${row.hours > 0 ? formatHours(row.hours) : ""}</td>
+<td class="num">${money(row.buy_in_cents)}</td>
+<td class="num">${money(row.cash_out_cents)}</td>
+<td class="num">${signedMoney(row.profit)}</td>
+<td class="num">${money(row.bankrollAfter)}</td>
+<td>${escapeHtml(row.notes || "")}</td>
+</tr>`
+    )
+    .join("\n");
+
+  const sessions = `<div class="table-wrap"><table>
+<tr>${header}</tr>
+${body}
+</table></div>`;
+
+  return page("poker", `${summary}\n\n${sessions}`);
+}
+
+function renderPokerAdmin(poker, editId, banner) {
+  const editing = editId ? poker.rows.find((row) => String(row.id) === String(editId)) : null;
+  const value = (field) => escapeHtml(editing && editing[field] != null ? editing[field] : "");
+  const dollars = (cents) => (cents / 100).toFixed(2);
+
+  const form = `<form method="POST" action="/admin">
+  <input type="hidden" name="action" value="${editing ? "update-poker" : "add-poker"}">
+  ${editing ? `<input type="hidden" name="id" value="${editing.id}">` : ""}
+  <p><input type="text" name="date" value="${escapeHtml(editing ? editing.played_on : today())}" required></p>
+  <p><input type="text" name="game" value="${value("game")}" placeholder="game" maxlength="60"></p>
+  <p><input type="text" name="stakes" value="${value("stakes")}" placeholder="stakes" maxlength="60"></p>
+  <p><input type="text" name="location" value="${value("location")}" placeholder="location" maxlength="100"></p>
+  <p><input type="text" name="hours" value="${value("hours")}" placeholder="hours" inputmode="decimal"></p>
+  <p><input type="text" name="buy_in" value="${editing ? dollars(editing.buy_in_cents) : ""}" placeholder="buy-in" inputmode="decimal" required></p>
+  <p><input type="text" name="cash_out" value="${editing ? dollars(editing.cash_out_cents) : ""}" placeholder="cash-out" inputmode="decimal" required></p>
+  <textarea name="notes" placeholder="notes" maxlength="1000">${value("notes")}</textarea>
+  <button type="submit">${editing ? "save session" : "add session"}</button>
+  ${editing ? `<a href="/admin#poker">cancel</a>` : ""}
+</form>`;
+
+  const start = `<form method="POST" action="/admin">
+  <input type="hidden" name="action" value="poker-start">
+  <p><input type="text" name="amount" value="${dollars(poker.startingCents)}" inputmode="decimal" required>
+  <button type="submit">set starting bankroll</button></p>
+</form>`;
+
+  const list = [...poker.rows]
+    .reverse()
+    .map((row) => {
+      const detail = [row.game, row.stakes, row.location]
+        .filter(Boolean)
+        .map(escapeHtml)
+        .join(" · ");
+
+      return `<p class="date">${escapeHtml(row.played_on)}${detail ? ` · ${detail}` : ""}</p><p>${signedMoney(
+        row.profit
+      )}</p><p class="actions"><a href="/admin?edit-poker=${row.id}#poker">edit</a> ${actionButton(
+        row.id,
+        "delete-poker",
+        "delete"
+      )}</p><hr>`;
+    })
+    .join("\n");
+
+  return `<h2 id="poker">poker</h2>
+${banner}
+<p class="date">bankroll ${money(poker.bankroll)} · ${poker.count} sessions · <a href="https://poker.nathansimpson.org/">public page</a></p>
+${form}
+${start}
+${list}`;
 }
 
 /* --------------------------------------------------------- publishing to git */
