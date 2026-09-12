@@ -719,6 +719,8 @@ async function handlePokerPage(env) {
 ${summaryRows.map(([label, value]) => `<tr><th>${label}</th><td class="num">${value}</td></tr>`).join("\n")}
 </table>`;
 
+  // Notes get their own full-width row under the session. Squeezed into a
+  // column, free text makes every row tall and narrow.
   const columns = [
     ["date", false],
     ["game", false],
@@ -729,7 +731,6 @@ ${summaryRows.map(([label, value]) => `<tr><th>${label}</th><td class="num">${va
     ["cash-out", true],
     ["profit", true],
     ["bankroll", true],
-    ["notes", false],
   ];
 
   const header = columns
@@ -738,9 +739,13 @@ ${summaryRows.map(([label, value]) => `<tr><th>${label}</th><td class="num">${va
 
   const body = [...poker.rows]
     .reverse()
-    .map(
-      (row) => `<tr>
-<td class="num">${escapeHtml(row.played_on)}</td>
+    .map((row) => {
+      const note = row.notes
+        ? `\n<tr class="note"><td colspan="${columns.length}">${escapeHtml(row.notes)}</td></tr>`
+        : "";
+
+      return `<tr${row.notes ? ' class="has-note"' : ""}>
+<td>${escapeHtml(row.played_on)}</td>
 <td>${escapeHtml(row.game || "")}</td>
 <td>${escapeHtml(row.stakes || "")}</td>
 <td>${escapeHtml(row.location || "")}</td>
@@ -749,17 +754,16 @@ ${summaryRows.map(([label, value]) => `<tr><th>${label}</th><td class="num">${va
 <td class="num">${money(row.cash_out_cents)}</td>
 <td class="num">${signedMoney(row.profit)}</td>
 <td class="num">${money(row.bankrollAfter)}</td>
-<td>${escapeHtml(row.notes || "")}</td>
-</tr>`
-    )
+</tr>${note}`;
+    })
     .join("\n");
 
-  const sessions = `<div class="table-wrap"><table>
+  const sessions = `<div class="table-wrap"><table class="sessions">
 <tr>${header}</tr>
 ${body}
 </table></div>`;
 
-  return page("poker", `${summary}\n\n${sessions}`);
+  return page("poker", `${summary}\n\n${sessions}`, { wide: true });
 }
 
 function renderPokerAdmin(poker, editId, banner) {
@@ -1111,15 +1115,19 @@ function escapeHtml(text) {
     .replace(/'/g, "&#39;");
 }
 
-function page(title, contents) {
+// Browsers keep style.css for ten minutes. Bump this whenever it changes so pages
+// served from here pick up the new rules straight away instead of the old copy.
+const STYLE_VERSION = "2";
+
+function page(title, contents, { wide = false } = {}) {
   const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <title>${escapeHtml(title)} — nathan simpson</title>
-<link rel="stylesheet" href="https://nathansimpson.org/style.css">
+<link rel="stylesheet" href="https://nathansimpson.org/style.css?v=${STYLE_VERSION}">
 </head>
-<body>
+<body${wide ? ' class="wide"' : ""}>
 
 <nav><a href="https://nathansimpson.org/">&larr; back to index</a></nav>
 
