@@ -12,6 +12,7 @@
 //   ADMIN_PASSWORD  -> secret, the password for /admin
 //   GITHUB_TOKEN    -> secret, a token with contents:write on the blog repo
 //   GITHUB_REPO     -> plain var, e.g. "nathansimpson2007/blog"
+//   DISCORD_WEBHOOK_URL -> secret, optional; pinged when something arrives
 
 const MAX_LENGTH = 5000;
 const GUESTBOOK_MAX_LENGTH = 1000;
@@ -26,7 +27,7 @@ const IMAGE_EXTENSIONS = ["jpg", "jpeg", "png", "gif", "webp"];
 const EXPIRY_WARNING_DAYS = 14;
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
     const isPoker = url.hostname.startsWith("poker.") || url.pathname === "/poker";
@@ -43,12 +44,12 @@ export default {
 
     if (isGuestbook) {
       return request.method === "POST"
-        ? handleGuestbookSign(request, env)
+        ? handleGuestbookSign(request, env, ctx)
         : handleGuestbookPage(env);
     }
 
     if (request.method === "POST" && url.pathname === "/submit") {
-      return handleSubmit(request, env);
+      return handleSubmit(request, env, ctx);
     }
 
     if (url.pathname.startsWith("/admin")) {
@@ -89,7 +90,7 @@ async function handleGuestbookPage(env) {
   return page("guestbook", `${form}\n${entries}`);
 }
 
-async function handleGuestbookSign(request, env) {
+async function handleGuestbookSign(request, env, ctx) {
   const form = await request.formData();
 
   if (form.get("website")) {
@@ -109,6 +110,10 @@ async function handleGuestbookSign(request, env) {
     .bind(name || null, body, new Date().toISOString())
     .run();
 
+  // After the row is safely stored, and only for entries that got past the
+  // honeypot, so bots never set a notification off.
+  ctx.waitUntil(notify(env, `new guestbook entry waiting for approval. ${ADMIN_URL}`));
+
   return page("guestbook", pendingNotice());
 }
 
@@ -119,7 +124,7 @@ function pendingNotice() {
 
 /* --------------------------------------------------------- private messages */
 
-async function handleSubmit(request, env) {
+async function handleSubmit(request, env, ctx) {
   const form = await request.formData();
 
   // Honeypot: real people never see this field, so anything in it is a bot.
@@ -171,6 +176,8 @@ async function handleSubmit(request, env) {
   )
     .bind(body, new Date().toISOString(), imageKey)
     .run();
+
+  ctx.waitUntil(notify(env, `new private message. ${ADMIN_URL}`));
 
   return page("thanks", "<p>message sent. thank you.</p>");
 }
@@ -246,6 +253,7 @@ nothing gets typed out and lost. everything below still works.</p>`;
   const sections = [
     banner,
     status,
+    renderNotifyStatus(env),
     publishing,
     renderPokerAdmin(poker, url.searchParams.get("edit-poker"), pokerFocused ? bannerHtml : ""),
     "<h2>guestbook — waiting for approval</h2>",
@@ -497,6 +505,14 @@ async function handleAdminAction(request, env) {
 
       return backToAdmin(request, `uploaded ${name}. the page rebuilds in a moment.`);
     }
+    if (action === "test-notify") {
+      const result = await notify(env, `test notification. ${ADMIN_URL}`);
+
+      return result.ok
+        ? backToAdmin(request, "test notification sent.")
+        : backToAdmin(request, null, result.error);
+    }
+
     if (action === "add-poker" || action === "update-poker") {
       const session = parsePokerForm(form);
 
@@ -594,6 +610,55 @@ function backToAdmin(request, notice, problem, section) {
   }
 
   return Response.redirect(target.toString(), 303);
+}
+
+/* ------------------------------------------------------------ notifications */
+
+const ADMIN_URL = "https://messages.nathansimpson.org/admin";
+
+// Deliberately says only that something arrived. What people send stays between
+// the site and the database, and never travels through Discord.
+//
+// Never throws: a failed notification must not break a submission or lose the
+// message that triggered it.
+async function notify(env, text) {
+  if (!env.DISCORD_WEBHOOK_URL) {
+    return { ok: false, error: "DISCORD_WEBHOOK_URL is not set on the Worker." };
+  }
+
+  try {
+    const response = await fetch(env.DISCORD_WEBHOOK_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        content: text,
+        // Nothing sent from here should ever ping anyone.
+        allowed_mentions: { parse: [] },
+      }),
+    });
+
+    if (!response.ok) {
+      return { ok: false, error: `Discord returned ${response.status}.` };
+    }
+
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: `Discord couldn't be reached: ${error.message}` };
+  }
+}
+
+function renderNotifyStatus(env) {
+  const configured = Boolean(env.DISCORD_WEBHOOK_URL);
+
+  const line = configured
+    ? `<p class="date">notifications: on</p>`
+    : `<p class="problem">notifications are off. set them up with: wrangler secret put DISCORD_WEBHOOK_URL</p>`;
+
+  const test = configured
+    ? `<form method="POST" action="/admin"><input type="hidden" name="action" value="test-notify"><button type="submit">send test notification</button></form>`
+    : "";
+
+  return `${line}\n${test}`;
 }
 
 /* -------------------------------------------------------------------- poker */
