@@ -1,14 +1,16 @@
-// Four things live here:
+// Five things live here:
 //   - private messages, written at /submit and readable only at /admin
 //   - a public guestbook, on guestbook.nathansimpson.org, held for approval
 //   - a public poker bankroll tracker, on poker.nathansimpson.org
+//   - page view counters, bumped at /hit by the blog's stats.js
 //   - the admin panel at /admin, which also publishes to the blog repo
 //
 // Private messages and guestbook entries use different tables so a private
 // message can never surface publicly.
 //
 // Bindings this Worker needs:
-//   DB              -> D1 database (messages, guestbook, poker_sessions, settings)
+//   DB              -> D1 database (messages, guestbook, poker_sessions, settings,
+//                      page_views, referrers)
 //   ADMIN_PASSWORD  -> secret, the password for /admin
 //   GITHUB_TOKEN    -> secret, a token with contents:write on the blog repo
 //   GITHUB_REPO     -> plain var, e.g. "nathansimpson2007/blog"
@@ -50,6 +52,10 @@ export default {
 
     if (request.method === "POST" && url.pathname === "/submit") {
       return handleSubmit(request, env, ctx);
+    }
+
+    if (request.method === "POST" && url.pathname === "/hit") {
+      return handleHit(request, env);
     }
 
     if (url.pathname.startsWith("/admin")) {
@@ -262,6 +268,7 @@ nothing gets typed out and lost. everything below still works.</p>`;
     renderQueue(approved.results, false),
     "<h2>private messages</h2>",
     renderMessages(messages.results),
+    await renderStats(env, messages.results, pending.results, approved.results),
   ];
 
   return page("admin", sections.join("\n"));
@@ -883,6 +890,280 @@ ${start}
 ${list}`;
 }
 
+/* -------------------------------------------------------------------- stats */
+
+const SITE_URL = "https://nathansimpson.org";
+const SITE_HOSTS = ["nathansimpson.org", "www.nathansimpson.org"];
+
+// Always answers 204: the beacon never reads the response, and a junk request
+// shouldn't learn whether it was counted.
+async function handleHit(request, env) {
+  const done = new Response(null, { status: 204 });
+
+  // Only count beacons sent from the blog's own pages.
+  let originHost = "";
+
+  try {
+    originHost = new URL(request.headers.get("Origin") || "").hostname;
+  } catch {
+    return done;
+  }
+
+  if (!SITE_HOSTS.includes(originHost)) return done;
+
+  const text = await request.text();
+
+  if (text.length > 1000) return done;
+
+  let data;
+
+  try {
+    data = JSON.parse(text);
+  } catch {
+    return done;
+  }
+
+  const path = normalizePath(data && data.path);
+
+  if (!path) return done;
+
+  const day = today();
+  const from = referrerHost(data.from);
+
+  const statements = [
+    env.DB.prepare(
+      "INSERT INTO page_views (day, path, views) VALUES (?, ?, 1) ON CONFLICT (day, path) DO UPDATE SET views = views + 1"
+    ).bind(day, path),
+  ];
+
+  if (from) {
+    statements.push(
+      env.DB.prepare(
+        "INSERT INTO referrers (day, host, views) VALUES (?, ?, 1) ON CONFLICT (day, host) DO UPDATE SET views = views + 1"
+      ).bind(day, from)
+    );
+  }
+
+  await env.DB.batch(statements);
+  return done;
+}
+
+// GitHub Pages serves /about for about.html, so both count as the same page.
+// Anything that isn't shaped like one of the blog's pages is dropped, so the
+// table can't fill up with made-up paths.
+function normalizePath(value) {
+  let path = String(value || "");
+
+  if (path === "/") path = "/index.html";
+  else if (!path.endsWith(".html")) path += ".html";
+
+  if (path === "/messages.html") return null;
+
+  return /^\/(posts\/)?[A-Za-z0-9_-]{1,80}\.html$/.test(path) ? path : null;
+}
+
+// "direct" when there was no referrer at all; null for clicks between pages of
+// the blog itself, which say nothing about where readers come from.
+function referrerHost(value) {
+  const host = String(value || "").toLowerCase().replace(/^www\./, "");
+
+  if (!host) return "direct";
+  if (host === "nathansimpson.org") return null;
+
+  return /^[a-z0-9.-]{1,100}$/.test(host) ? host : null;
+}
+
+function daysAgo(days) {
+  return new Date(Date.now() - days * 86400000).toLocaleDateString("en-CA", {
+    timeZone: "America/Chicago",
+  });
+}
+
+// Reads the public site rather than the repo, so stats still show when the
+// GitHub token is broken.
+async function loadSiteContent() {
+  const [indexResponse, picturesResponse] = await Promise.all([
+    fetch(`${SITE_URL}/index.html`),
+    fetch(`${SITE_URL}/pictures.json`),
+  ]);
+
+  if (!indexResponse.ok || !picturesResponse.ok) {
+    throw new Error("the public site didn't answer.");
+  }
+
+  const index = await indexResponse.text();
+  const pattern = /<li><a href="posts\/([^"]+)">([^<]+)<\/a> <span class="date">([^<]+)<\/span>/g;
+
+  const posts = [...index.matchAll(pattern)].map((match) => ({
+    path: `/posts/${match[1]}`,
+    title: match[2],
+    date: match[3],
+  }));
+
+  return { posts, pictures: await picturesResponse.json() };
+}
+
+async function renderStats(env, messages, pending, approved) {
+  const sections = ['<h2 id="stats">stats</h2>'];
+
+  let site = null;
+
+  try {
+    site = await loadSiteContent();
+  } catch (error) {
+    sections.push(
+      `<p class="problem">couldn't read the site for post stats — ${escapeHtml(error.message)}</p>`
+    );
+  }
+
+  try {
+    sections.push(await renderTraffic(env, site));
+  } catch (error) {
+    sections.push(
+      `<p class="problem">page views unavailable — ${escapeHtml(
+        error.message
+      )}. if the tables are missing, run worker/stats-schema.sql.</p>`
+    );
+  }
+
+  sections.push(renderActivity(site, messages, pending, approved));
+  return sections.join("\n\n");
+}
+
+async function renderTraffic(env, site) {
+  const monthStart = daysAgo(29);
+
+  const [totals, daily, pages, referrers] = await Promise.all([
+    env.DB.prepare(
+      `SELECT
+         COALESCE(SUM(CASE WHEN day >= ? THEN views END), 0) AS today,
+         COALESCE(SUM(CASE WHEN day >= ? THEN views END), 0) AS week,
+         COALESCE(SUM(CASE WHEN day >= ? THEN views END), 0) AS month,
+         COALESCE(SUM(views), 0) AS ever,
+         MIN(day) AS since
+       FROM page_views`
+    )
+      .bind(daysAgo(0), daysAgo(6), monthStart)
+      .first(),
+    env.DB.prepare(
+      "SELECT day, SUM(views) AS views FROM page_views WHERE day >= ? GROUP BY day"
+    )
+      .bind(daysAgo(13))
+      .all(),
+    env.DB.prepare(
+      "SELECT path, SUM(views) AS views FROM page_views WHERE day >= ? GROUP BY path ORDER BY views DESC LIMIT 15"
+    )
+      .bind(monthStart)
+      .all(),
+    env.DB.prepare(
+      "SELECT host, SUM(views) AS views FROM referrers WHERE day >= ? GROUP BY host ORDER BY views DESC LIMIT 15"
+    )
+      .bind(monthStart)
+      .all(),
+  ]);
+
+  if (!totals.ever) {
+    return "<p>no page views counted yet.</p>";
+  }
+
+  const titles = new Map((site ? site.posts : []).map((post) => [post.path, post.title]));
+
+  // Post titles come from the blog's own index, which is already HTML.
+  const pageName = (path) =>
+    titles.get(path) || escapeHtml(path.replace(/^\//, "").replace(/\.html$/, ""));
+
+  const summary = statTable([
+    ["today", totals.today],
+    ["last 7 days", totals.week],
+    ["last 30 days", totals.month],
+    [`since ${escapeHtml(totals.since)}`, totals.ever],
+  ]);
+
+  const byDay = new Map(daily.results.map((row) => [row.day, row.views]));
+  const days = Array.from({ length: 14 }, (_, i) => daysAgo(i));
+  const peak = Math.max(1, ...days.map((day) => byDay.get(day) || 0));
+
+  const chart = `<table>
+${days
+  .map((day) => {
+    const views = byDay.get(day) || 0;
+    const width = ((views / peak) * 10).toFixed(2);
+
+    return `<tr><td>${day}</td><td class="num">${views}</td><td><span class="bar" style="width: ${width}em"></span></td></tr>`;
+  })
+  .join("\n")}
+</table>`;
+
+  return `<p class="date">page views, counted by stats.js. messages.html is never counted.</p>
+${summary}
+
+<h3>last 14 days</h3>
+${chart}
+
+<h3>top pages, last 30 days</h3>
+${statTable(pages.results.map((row) => [pageName(row.path), row.views]))}
+
+<h3>where readers came from, last 30 days</h3>
+${statTable(referrers.results.map((row) => [escapeHtml(row.host), row.views]))}`;
+}
+
+function renderActivity(site, messages, pending, approved) {
+  const monthAgo = Date.now() - 30 * 86400000;
+  const recent = (rows) => rows.filter((row) => Date.parse(row.created_at) >= monthAgo).length;
+
+  const rows = [];
+
+  if (site) {
+    const { posts, pictures } = site;
+    const latest = posts.map((post) => post.date).sort().pop();
+    const sinceLatest = latest
+      ? Math.round((Date.parse(daysAgo(0)) - Date.parse(latest)) / 86400000)
+      : null;
+
+    rows.push(
+      ["posts", posts.length],
+      ["posts, last 30 days", posts.filter((post) => post.date >= daysAgo(29)).length],
+      ["days since the last post", sinceLatest === null ? "—" : sinceLatest],
+      ["pictures", pictures.length],
+      ["pictures, last 30 days", pictures.filter((picture) => picture.date >= daysAgo(29)).length]
+    );
+  }
+
+  rows.push(
+    ["private messages", messages.length],
+    ["messages, last 30 days", recent(messages)],
+    ["messages with a picture", messages.filter((message) => message.image_key).length],
+    ["guestbook entries", approved.length],
+    ["guestbook, waiting", pending.length],
+    ["guestbook, last 30 days", recent([...approved, ...pending])]
+  );
+
+  let perMonth = "";
+
+  if (site && site.posts.length) {
+    const counts = new Map();
+
+    for (const post of site.posts) {
+      const month = post.date.slice(0, 7);
+      counts.set(month, (counts.get(month) || 0) + 1);
+    }
+
+    const months = [...counts].sort((a, b) => b[0].localeCompare(a[0])).slice(0, 12);
+    perMonth = `\n\n<h3>posts per month</h3>\n${statTable(months)}`;
+  }
+
+  return `<h3>activity</h3>\n${statTable(rows)}${perMonth}`;
+}
+
+// Labels are expected to be HTML already; values are numbers or plain text.
+function statTable(rows) {
+  if (!rows.length) return "<p>nothing yet.</p>";
+
+  return `<table>
+${rows.map(([label, value]) => `<tr><th>${label}</th><td class="num">${value}</td></tr>`).join("\n")}
+</table>`;
+}
+
 /* --------------------------------------------------------- publishing to git */
 
 async function publishPost(env, title, date, body) {
@@ -932,6 +1213,7 @@ function renderPost(title, date, body) {
 <meta charset="UTF-8">
 <title>${escapeHtml(title)} — nathan simpson</title>
 <link rel="stylesheet" href="../style.css">
+<script src="../stats.js" defer></script>
 </head>
 <body>
 
@@ -1182,7 +1464,7 @@ function escapeHtml(text) {
 
 // Browsers keep style.css for ten minutes. Bump this whenever it changes so pages
 // served from here pick up the new rules straight away instead of the old copy.
-const STYLE_VERSION = "2";
+const STYLE_VERSION = "3";
 
 function page(title, contents, { wide = false } = {}) {
   const html = `<!DOCTYPE html>
