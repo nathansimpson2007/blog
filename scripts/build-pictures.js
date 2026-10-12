@@ -41,6 +41,7 @@ const html = `<!DOCTYPE html>
 <meta charset="UTF-8">
 <title>pictures — nathan simpson</title>
 <link rel="stylesheet" href="style.css">
+<script src="stats.js" defer></script>
 </head>
 <body>
 

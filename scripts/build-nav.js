@@ -1,4 +1,5 @@
-// Adds previous/next links to the bottom of every post.
+// Adds previous/next links to the bottom of every post, and makes sure each
+// post loads stats.js so it shows up in the admin panel's page view counts.
 //
 // The index is the source of truth for ordering, so posts appear in the same
 // sequence readers see there. Re-run after adding a post:
@@ -35,6 +36,14 @@ posts.forEach((post, i) => {
   const parts = [];
   if (previous) parts.push(link(previous, "&larr;", false));
   if (next) parts.push(link(next, "&rarr;", true));
+
+  // Posts written by hand can easily miss the counter, so add it here.
+  if (!html.includes("stats.js")) {
+    html = html.replace(
+      '<link rel="stylesheet" href="../style.css">',
+      '<link rel="stylesheet" href="../style.css">\n<script src="../stats.js" defer></script>'
+    );
+  }
 
   // Strip any block from a previous run so this stays idempotent.
   html = html.replace(/\n*<nav class="postnav">[\s\S]*?<\/nav>\n*/, "\n\n");

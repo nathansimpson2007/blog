@@ -166,6 +166,13 @@ button {
   border-left-color: #b00;
 }
 
+/* Daily page view bars in the admin stats. */
+.bar {
+  display: inline-block;
+  height: 0.7em;
+  background: currentColor;
+}
+
 /* Approve/delete buttons sit side by side on the admin page. */
 .actions form {
   display: inline;
